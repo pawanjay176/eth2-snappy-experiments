@@ -32,7 +32,7 @@ class BlocksByRange(Container):
     step: uint64
 
 
-class BlocksByRoot(List[SignedBeaconBlock, 1024]):
+class BlocksByRoot(List[Bytes32, 1024]):
     pass
 
 
@@ -195,6 +195,94 @@ async def server_blocks_by_root_example(rumor: Rumor, nursery: trio.Nursery):
 
     print("morty: stopped listening for requests")
 
+async def send_all_requests(rumor: Rumor, nursery: trio.Nursery):
+    # Morty is us
+    morty = rumor.actor("morty")
+    await morty.host.start()
+    await morty.host.listen(tcp=9000)
+    print("started morty")
+
+    rick_enr = "enr:-Ku4QM-p4szB_L1Ca32OpGh0tL2kZA2I26hXNtcbMcolFZz6Kfumn33-n8cE3qyGCsFRQPCa0DszEy9tBJnp0sb9YkEBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpAAAAAAAAAAAAAAAAAAAAAAgmlkgnY0gmlwhH8AAAGJc2VjcDI1NmsxoQMHzWU3mH2sphZXxi24HHpBo7VHM2YnjjA8ofU9f7XhYYN0Y3CCIyk"
+
+    call = morty.rpc.blocks_by_range.listen(raw=True)
+    call = morty.rpc.status.listen(raw=True)
+    call = morty.rpc.blocks_by_root.listen(raw=True)
+    call = morty.rpc.goodbye.listen(raw=True)
+    rick_peer_id = await morty.peer.connect(rick_enr, "bootnode").peer_id()
+
+    print(f"connected to Rick {rick_peer_id}")
+
+    state = load_state("genesis.ssz")
+    genesis_root = state.hash_tree_root()
+
+    # Status
+    morty_status_request = Status(
+        version=GENESIS_FORK_VERSION,
+        finalized_root=genesis_root,
+        finalized_epoch=0,
+        head_root=genesis_root,
+        head_epoch=0,
+    )
+    req = morty_status_request.encode_bytes().hex()
+    print(f"morty: sending rick a status request: {req}")
+
+    resp = await morty.rpc.status.req.raw(rick_peer_id, req, raw=True)
+
+    print(f"morty: received status response from rick: {resp}")
+    try:
+        rick_status = Status.decode_bytes(bytes.fromhex(resp["chunk"]["data"]))
+        print(rick_status)
+    except Exception as e:
+        print(f"could not decode status response: {e}")
+
+    # Range
+    morty_range_request = BlocksByRange(
+        head_block_root="0x0000000000000000000000000000000000000000000000000000000000000000",
+        start_slot=0,
+        count=10,
+        step=0,
+    )
+    req = morty_range_request.encode_bytes().hex()
+    print(f"morty: sending rick a range request: {req}")
+
+    resp = await morty.rpc.blocks_by_range.req.raw(rick_peer_id, req, raw=True)
+
+    print(f"morty: received range response from rick: {resp}")
+    try:
+        rick_status = SignedBeaconBlock.decode_bytes(
+            bytes.fromhex(resp["chunk"]["data"])
+        )
+        print(rick_status)
+    except Exception as e:
+        print(f"could not decode range response: {e}")
+
+    # Root
+    morty_root_request = BlocksByRoot([genesis_root])
+
+    req = morty_root_request.encode_bytes().hex()
+    print(f"morty: sending rick a root request: {req}")
+
+    resp = await morty.rpc.blocks_by_root.req.raw(rick_peer_id, req, raw=True)
+
+    print(f"morty: received root response from rick: {resp}")
+    try:
+        rick_status = SignedBeaconBlock.decode_bytes(
+            bytes.fromhex(resp["chunk"]["data"])
+        )
+        print(rick_status)
+    except Exception as e:
+        print(f"could not decode root response: {e}")
+
+    # Goodbye
+    morty_goodbye_request = Goodbye(0)
+
+    req = morty_goodbye_request.encode_bytes().hex()
+    print(f"morty: sending rick a goodbye request: {req}")
+
+    await morty.rpc.goodbye.req.raw(rick_peer_id, req, raw=True)
+    print("Done")
+
+
 
 async def run_rumor_function(fn: Callable[[Rumor, trio.Nursery], Coroutine]):
     async with trio.open_nursery() as nursery:
@@ -207,6 +295,7 @@ async def run_rumor_function(fn: Callable[[Rumor, trio.Nursery], Coroutine]):
             print(e)
 
 
-trio.run(run_rumor_function, basic_status_example)
+# trio.run(run_rumor_function, basic_status_example)
 # trio.run(run_rumor_function, server_blocks_by_range_example)
 # trio.run(run_rumor_function, server_blocks_by_root_example)
+trio.run(run_rumor_function, send_all_requests)
